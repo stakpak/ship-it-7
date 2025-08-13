@@ -1,0 +1,120 @@
+name: Trivy Terraform Security Scan
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: ['*']
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  trivy-scan:
+    name: Trivy Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          exit-code: '1'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-terraform'
+
+      - name: Generate scan summary for PR comment
+        if: github.event_name == 'pull_request'
+        run: |
+          if [[ -f trivy-results.sarif ]]; then
+            # Extract summary information from SARIF
+            CRITICAL=$(jq '[.runs[].results[] | select(.level == "error")] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            HIGH=$(jq '[.runs[].results[] | select(.level == "warning")] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            MEDIUM=$(jq '[.runs[].results[] | select(.level == "note")] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            TOTAL=$(jq '[.runs[].results[]] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            
+            echo "CRITICAL_COUNT=$CRITICAL" >> $GITHUB_ENV
+            echo "HIGH_COUNT=$HIGH" >> $GITHUB_ENV
+            echo "MEDIUM_COUNT=$MEDIUM" >> $GITHUB_ENV
+            echo "TOTAL_COUNT=$TOTAL" >> $GITHUB_ENV
+          else
+            echo "CRITICAL_COUNT=0" >> $GITHUB_ENV
+            echo "HIGH_COUNT=0" >> $GITHUB_ENV
+            echo "MEDIUM_COUNT=0" >> $GITHUB_ENV
+            echo "TOTAL_COUNT=0" >> $GITHUB_ENV
+          fi
+
+      - name: Comment PR with scan results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const critical = process.env.CRITICAL_COUNT;
+            const high = process.env.HIGH_COUNT;
+            const medium = process.env.MEDIUM_COUNT;
+            const total = process.env.TOTAL_COUNT;
+            
+            const criticalEmoji = critical > 0 ? '🔴' : '✅';
+            const highEmoji = high > 0 ? '🟠' : '✅';
+            const mediumEmoji = medium > 0 ? '🟡' : '✅';
+            
+            const body = `## 🛡️ Trivy Terraform Security Scan Results
+            
+            | Severity | Count | Status |
+            |----------|-------|--------|
+            | Critical | ${critical} | ${criticalEmoji} |
+            | High | ${high} | ${highEmoji} |
+            | Medium | ${medium} | ${mediumEmoji} |
+            | **Total** | **${total}** | ${total > 0 ? '⚠️' : '✅'} |
+            
+            ${critical > 0 || high > 0 ? 
+              '⚠️ **Action Required**: Critical or High severity vulnerabilities found. Please review the Security tab for detailed findings.' : 
+              '✅ **All Clear**: No critical or high severity vulnerabilities detected.'}
+            
+            📊 View detailed results in the [Security tab](${context.payload.repository.html_url}/security/code-scanning)
+            
+            ---
+            *Scan performed on: ${new Date().toISOString()}*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Fail workflow on HIGH or CRITICAL vulnerabilities
+        if: always()
+        run: |
+          if [[ -f trivy-results.sarif ]]; then
+            CRITICAL=$(jq '[.runs[].results[] | select(.level == "error")] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            HIGH=$(jq '[.runs[].results[] | select(.level == "warning")] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            
+            if [[ $CRITICAL -gt 0 || $HIGH -gt 0 ]]; then
+              echo "❌ Security scan failed: Found $CRITICAL critical and $HIGH high severity vulnerabilities"
+              echo "Please review the findings in the Security tab and address the issues before proceeding."
+              exit 1
+            else
+              echo "✅ Security scan passed: No critical or high severity vulnerabilities found"
+            fi
+          else
+            echo "⚠️ Warning: SARIF file not found, treating as scan failure"
+            exit 1
+          fi
