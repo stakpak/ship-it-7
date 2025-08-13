@@ -41,7 +41,7 @@ jobs:
           category: 'trivy-terraform'
 
       - name: Analyze Trivy findings with Stakpak Agent
-        uses: stakpak/agent@v1.0.10
+        uses: stakpak/stakpak-action@v1.0.10
         if: always() && hashFiles('trivy-results.sarif') != ''
         with:
           api_key: ${{ secrets.STAKPAK_API_KEY }}
