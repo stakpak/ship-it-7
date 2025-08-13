@@ -40,6 +40,15 @@ jobs:
           sarif_file: 'trivy-results.sarif'
           category: 'trivy-terraform'
 
+      - name: Analyze Trivy findings with Stakpak Agent
+        uses: stakpak/agent@v1.0.10
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        with:
+          api_key: ${{ secrets.STAKPAK_API_KEY }}
+          prompt: "Analyze the Trivy security scan results in trivy-results.sarif and provide a risk assessment. For each vulnerability found: 1) Calculate risk score = Impact × Likelihood (scale 1-5 each), 2) Rank vulnerabilities by risk score (highest first), 3) Provide actionable remediation recommendations, 4) Assess business impact and urgency. Consider Impact: Data exposure, system compromise, compliance violations. Likelihood: Exploitability, attack vectors, current threat landscape. Context: This is Terraform infrastructure code for cloud resources. Output format: Risk Assessment Summary with High Risk Vulnerabilities (Score 15+), Medium Risk Vulnerabilities (Score 8-14), Low Risk Vulnerabilities (Score 1-7), and Prioritized Action Plan. Save the analysis to trivy-risk-assessment.md"
+          max_steps: 15
+          verbose: false
+
       - name: Generate scan summary for PR comment
         if: github.event_name == 'pull_request'
         run: |
